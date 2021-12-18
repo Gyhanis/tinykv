@@ -139,26 +139,6 @@ func (l *RaftLog) locate(i uint64, low, high int64) (uint64, error) {
 
 func (l *RaftLog) getEntries(i, j uint64) ([]pb.Entry, error) {
 	ents := make([]pb.Entry, 0)
-	// if i < l.entries[0].Index {
-	// 	if j < l.entries[0].Index {
-	// 		return l.storage.Entries(i, j)
-	// 	} else {
-	// 		li, err := l.storage.LastIndex()
-	// 		if err != nil {
-	// 			return nil, err
-	// 		}
-	// 		tmp, err := l.storage.Entries(i, li+1)
-	// 		if err != nil {
-	// 			return nil, err
-	// 		}
-	// 		k, err := l.locate(j, 0, int64(len(l.entries)-1))
-	// 		if err != nil {
-	// 			return nil, err
-	// 		}
-	// 		tmp = append(tmp, l.entries[:k+1]...)
-	// 		return tmp, nil
-	// 	}
-	// } else {
 	m, err := l.locate(i, 0, int64(len(l.entries)-1))
 	if err != nil {
 		return ents, err

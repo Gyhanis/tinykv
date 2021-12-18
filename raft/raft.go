@@ -405,6 +405,15 @@ func (r *Raft) tryCommit(i uint64) {
 			}
 			if sum > (len(r.Prs) / 2) {
 				r.RaftLog.commit(i)
+				msg := r.newMessage(pb.MessageType_MsgAppend)
+				msg.LogTerm = r.Term
+				msg.Commit = r.RaftLog.committed
+				for j, progress := range r.Prs {
+					if progress.Match >= i && j != r.id {
+						msg.Index = progress.Match
+						r.send(msg, j)
+					}
+				}
 			}
 		}
 	}
@@ -448,7 +457,7 @@ func (r *Raft) Step(m pb.Message) error {
 		case pb.MessageType_MsgRequestVote:
 			r.vote(m)
 		case pb.MessageType_MsgHeartbeat:
-			r.electionElapsed = 0
+			r.handleHeartbeat(m)
 		case pb.MessageType_MsgAppend:
 			r.handleAppendEntries(m)
 		}
@@ -466,12 +475,12 @@ func (r *Raft) Step(m pb.Message) error {
 		case pb.MessageType_MsgAppend:
 			if m.Term >= r.Term {
 				r.becomeFollower(m.Term, m.From)
-				r.electionElapsed = 0
+				r.handleAppendEntries(m)
 			}
 		case pb.MessageType_MsgHeartbeat:
 			if m.Term >= r.Term {
 				r.becomeFollower(m.Term, m.From)
-				r.electionElapsed = 0
+				r.handleHeartbeat(m)
 			}
 		case pb.MessageType_MsgRequestVote:
 			r.vote(m)
@@ -487,7 +496,9 @@ func (r *Raft) Step(m pb.Message) error {
 				m.Entries[i].Index = base + uint64(i)
 			}
 			r.RaftLog.log(m.Entries)
-			if len(r.Prs) == 0 {
+			if len(r.Prs) == 1 {
+				r.Prs[r.id].Match = m.Entries[len(m.Entries)-1].Index
+				r.Prs[r.id].Next = r.Prs[r.id].Match + 1
 				r.tryCommit(m.Entries[len(m.Entries)-1].Index)
 			} else {
 				msg := r.newMessage(pb.MessageType_MsgAppend)
@@ -506,8 +517,19 @@ func (r *Raft) Step(m pb.Message) error {
 			}
 		case pb.MessageType_MsgAppendResponse:
 			if !m.Reject {
-				r.Prs[m.From].Match = r.Prs[m.From].Next
-				r.tryCommit(r.Prs[m.From].Match)
+				if m.Index != 0 {
+					r.Prs[m.From].Match = r.Prs[m.From].Next
+					if m.Index <= r.RaftLog.committed {
+						msg := r.newMessage(pb.MessageType_MsgAppend)
+						msg.Index = r.Prs[m.From].Next
+						msg.LogTerm = r.Term
+						msg.Commit = r.RaftLog.committed
+						r.send(msg, m.From)
+					} else {
+						r.tryCommit(m.Index)
+					}
+				}
+				r.Prs[m.From].Next = r.Prs[m.From].Match + 1
 			} else {
 				msg := r.newMessage(pb.MessageType_MsgAppend)
 				msg.Entries = make([]*pb.Entry, 0)
@@ -522,6 +544,19 @@ func (r *Raft) Step(m pb.Message) error {
 			}
 		case pb.MessageType_MsgRequestVote:
 			r.vote(m)
+		case pb.MessageType_MsgHeartbeatResponse:
+			if r.Prs[m.From].Match != r.RaftLog.lastIndex {
+				r.Prs[m.From].Next = r.RaftLog.lastIndex
+				msg := r.newMessage(pb.MessageType_MsgAppend)
+				msg.Entries = make([]*pb.Entry, 0)
+				for i := r.Prs[m.From].Match + 1; i <= r.Prs[m.From].Next; i++ {
+					j, _ := r.RaftLog.locate(i, 0, int64(r.RaftLog.lastIndex))
+					msg.Entries = append(msg.Entries, &r.RaftLog.entries[j])
+				}
+				msg.Index = r.Prs[m.From].Match
+				msg.LogTerm, _ = r.RaftLog.Term(msg.Index)
+				r.send(msg, m.From)
+			}
 		}
 	}
 	return nil
@@ -539,11 +574,16 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		resp.Reject = true
 	} else {
 		r.RaftLog.log(m.Entries)
+		if len(m.Entries) == 0 {
+			resp.Index = 0
+		} else {
+			resp.Index = m.Entries[len(m.Entries)-1].Index
+		}
 		var commit uint64
-		if len(m.Entries)-1 >= 0 {
+		if len(m.Entries) >= 1 {
 			commit = min(m.Entries[len(m.Entries)-1].Index, m.Commit)
 		} else {
-			commit = min(r.RaftLog.lastIndex, m.Commit)
+			commit = min(m.Index, m.Commit)
 		}
 		r.RaftLog.commit(commit)
 		resp.Commit = commit
@@ -555,6 +595,9 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 // handleHeartbeat handle Heartbeat RPC request
 func (r *Raft) handleHeartbeat(m pb.Message) {
 	// Your Code Here (2A).
+	r.electionElapsed = 0
+	msg := r.newMessage(pb.MessageType_MsgHeartbeatResponse)
+	r.send(msg, m.From)
 }
 
 // handleSnapshot handle Snapshot RPC request

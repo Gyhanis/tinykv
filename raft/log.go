@@ -90,6 +90,12 @@ func newLog(storage Storage) *RaftLog {
 	return log
 }
 
+func (l *RaftLog) truncate(end uint64) {
+	i, _ := l.locate(end, 0, int64(len(l.entries)-1))
+	l.entries = l.entries[:i+1]
+	l.lastIndex = i
+}
+
 func (l *RaftLog) log(ents []*pb.Entry) {
 	for _, ent := range ents {
 		// fmt.Printf("Appending %v\n", ent)
@@ -162,7 +168,7 @@ func (l *RaftLog) getEntries(i, j uint64) ([]pb.Entry, error) {
 		return ents, err
 	}
 	ents = append(ents, l.entries[m:n+1]...)
-	return l.entries[m : n+1], nil
+	return ents, nil
 	// }
 }
 
